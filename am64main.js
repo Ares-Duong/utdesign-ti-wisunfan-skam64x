@@ -18,15 +18,15 @@ writeApi.useDefaultTags({host: 'host1'})
 // Interval between data collection
 const dataPollInt = 5000
 
-// data will be filled out with PollData
+// data will be filled out with PollData. m = motion, n = noise
 data = {
-  "time": new Date(),
-  "measurement": "motionReading",
-  "sensor": "11.111.111.111",
-  "value": 0
+  m_name: "motionReading",
+  m_timestamp: new Date(),
+  m_value: false,
+  n_name: "noiseReading",
+  n_timestamp: new Date(),
+  n_value: 0
 }
-
-console.log(data)
 
 // ipList will be populated through GetIPs using the topology
 const topologyRoute = "http://localhost:80/topology"
@@ -43,13 +43,18 @@ const configGet = {
   options: {},
 };
 
-// while on, execute every dataPollInt
+// loop on a timer: every dataPollInt
 setInterval( async () => {
   GetIPs()
-  // for each ip in iplist except last (border router)
+  // skip last ip address (border router)
   for(let i = 0; i < ipList.length-1; i++) {
     PollData(ipList[i])
-    SendToDatabase(data)
+
+    let datapoint = PointMotion(data, ipList[i])
+    PlotPoint(datapoint)
+
+    datapoint = PointNoise(data, ipList[i])
+    PlotPoint(datapoint)
   }
 }, dataPollInt);
 
@@ -59,23 +64,21 @@ function GetIPs() {
   ipList = topology.connectedDevices
 }
 
-// CoAP request to a single ip address
+// CoAP request to a single ip address, asking for motion and noise readings
 // Returns null
 function PollData(targetIP) {
   configGet.host = targetIP;
   const response = coap.request(configGet);
 
-  // When coap.request() returns a response, extract the data
+  // When coap.request() returns a response, extract the data from buffer
   response.on("response", (res) => {
-    data["measurement"] = getResponse.payload.readUInt8(0) // motionReading or noiseReading
+    data[m_name] = getResponse.payload.readUInt8(0)
+    data[m_timestamp] = getResponse.payload.readUInt8(1)
+    data[m_value] = !!getResponse.payload.readUInt8(2)
 
-    data["sensor"] = getResponse.payload.readUInt8(1); // ip address
-
-    if(data["measurement"] == "motionReading") {
-      data["value"] = !!getResponse.payload.readUInt8(2) // expected boolean
-    } else if(data["measurement"] == "noiseReading") {
-      data["value"] = getResponse.payload.readUInt8(2) // expected float
-    }
+    data[n_name] = getResponse.payload.readUInt8(3)
+    data[n_timestamp] = getResponse.payload.readUInt8(4)
+    data[n_value] = getResponse.payload.readUInt8(5)
   });
 
   getRequest.end();
@@ -83,12 +86,21 @@ function PollData(targetIP) {
 
 // Send a datapoint to the database
 // Returns null
-function SendToDatabase(dat) {
+function PlotPoint(datapoint) {
   try {
-    datapoint = new Point(dat["measurement"]).tag("sensor",dat["sensor"]).floatField("value",dat["value"]).timestamp(new Date())
     writeApi.writePoint(datapoint)
     console.log("Sent datapoint to database.")
   } catch (err) {
     console.log("Error while sending to database. Error: " + err)
   }
+}
+
+// Returns a point for the motion dataset
+function PointMotion(dat, ip) {
+  return new Point(dat[m_name]).tag("sensor",ip).floatField("value",dat[m_value]).timestamp(dat[m_timestamp])
+}
+
+// Returns a point for the noise dataset
+function PointNoise(dat, ip) {
+  return new Point(dat[n_name]).tag("sensor",ip).floatField("value",dat[n_value]).timestamp(dat[n_timestamp])
 }
