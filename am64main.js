@@ -16,7 +16,7 @@ const writeApi = database.getWriteApi(org, bucket)
 writeApi.useDefaultTags({host: 'host1'})
 
 // Interval between data collection
-const dataPollInt = 1000
+const dataPollInt = 5000
 
 // data will be filled out with PollData
 data = {
@@ -26,44 +26,66 @@ data = {
   "value": 0
 }
 
-// ipList will be populated through GetIPs
-//let ipList = []
-
 console.log(data)
 
-// while on, every dataPollInt
-//   GetIPs
-//   for each ip in iplist except last (border router)
-//     PollData
-       SendToDatabase()
+// ipList will be populated through GetIPs using the topology
+const topologyRoute = "http://localhost:80/topology"
+let ipList = []
 
-function GetIPs() {
-  // ipList = topology.connectedDevices
-}
+// Contains configurations used in coap requests
+const configGet = {
+  observe: false,
+  host: null,
+  pathname: '/led',
+  method: 'get',
+  confirmable: 'true',
+  retrySend: 'true',
+  options: {},
+};
 
-// CoAP request
-function PollData() {
-  // The following code is copied from the LED code
-/*
-  export function getCoapLedStatus(targetIP) {
-    getOptions.host = targetIP;
-    const getRequest = coap.request(getOptions);
-
-    getRequest.on('response', (getResponse) => {
-      ledStates.rled = !!getResponse.payload.readUInt8(0);
-      ledStates.gled = !!getResponse.payload.readUInt8(1);
-    });
-
-    getRequest.end();
-    return ledStates;
+// while on, execute every dataPollInt
+setInterval( async () => {
+  GetIPs()
+  // for each ip in iplist except last (border router)
+  for(let i = 0; i < ipList.length-1; i++) {
+    PollData(ipList[i])
+    SendToDatabase(data)
   }
-*/
+}, dataPollInt);
+
+// Populate ipList with connected ips
+// Returns null
+function GetIPs() {
+  ipList = topology.connectedDevices
 }
 
-//send a datapoint to the database
-function SendToDatabase() {
+// CoAP request to a single ip address
+// Returns null
+function PollData(targetIP) {
+  configGet.host = targetIP;
+  const response = coap.request(configGet);
+
+  // When coap.request() returns a response, extract the data
+  response.on("response", (res) => {
+    data["measurement"] = getResponse.payload.readUInt8(0) // motionReading or noiseReading
+
+    data["sensor"] = getResponse.payload.readUInt8(1); // ip address
+
+    if(data["measurement"] == "motionReading") {
+      data["value"] = !!getResponse.payload.readUInt8(2) // expected boolean
+    } else if(data["measurement"] == "noiseReading") {
+      data["value"] = getResponse.payload.readUInt8(2) // expected float
+    }
+  });
+
+  getRequest.end();
+}
+
+// Send a datapoint to the database
+// Returns null
+function SendToDatabase(dat) {
   try {
-    datapoint = new Point(data["measurement"]).tag("sensor",data["sensor"]).floatField("value",data["value"]).timestamp(new Date())
+    datapoint = new Point(dat["measurement"]).tag("sensor",dat["sensor"]).floatField("value",dat["value"]).timestamp(new Date())
     writeApi.writePoint(datapoint)
     console.log("Sent datapoint to database.")
   } catch (err) {
